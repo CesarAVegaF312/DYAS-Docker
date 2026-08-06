@@ -275,9 +275,7 @@ services:
         volumes:
         - "/var/run/docker.sock:/var/run/docker.sock"
         labels:
-        - "traef
-
-ik.enable=true"
+        - "traefik.enable=true"
 ```
 
 En este caso, el servicio web no va a tener acceso al exterior (hemos eliminado el parámetro ports). En su lugar hemos añadido un balanceador de carga (el servicio traefik).
