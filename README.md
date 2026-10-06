@@ -710,15 +710,17 @@ Con Docker Compose se pasa de un contenedor a una aplicación de varios servicio
 1. **Agrega el Dockerfile *multi-stage*** de la Parte 4 a la raíz del repositorio del proyecto, con su `.dockerignore`.
 2. **Escribe un `docker-compose.yaml`** con la aplicación y sus dependencias (base de datos, *broker* de mensajes), con *healthchecks* y `depends_on` con condición.
 3. **Fija las versiones** de todas las imágenes del archivo de Compose.
-4. **Agrega un job de Docker al pipeline de CI** que construya la imagen solo si las pruebas pasan (`needs:`).
-5. **Escanea la imagen con Trivy** y actualiza las dependencias con vulnerabilidades críticas.
+4. **Lleva la configuración a variables de entorno**: contraseñas, *tokens* y cadenas de conexión no van en el código ni en la imagen. Agrega un `.env.example` con las variables necesarias y valores de ejemplo, y deja el `.env` real fuera del repositorio con `.gitignore`.
+5. **Agrega un job de Docker al pipeline de CI** que construya la imagen solo si las pruebas pasan (`needs:`).
+6. **Escanea la imagen con Trivy** y actualiza las dependencias con vulnerabilidades críticas.
 
-Checklist para el Proyecto 3:
+Checklist para el Proyecto 3 (sección 1 del enunciado):
 
-- [ ] Dockerfile *multi-stage* con usuario sin privilegios.
+- [ ] Dockerfile *multi-stage* con imagen base de versión fija y usuario sin privilegios.
 - [ ] `.dockerignore` en el repositorio.
-- [ ] `docker-compose.yaml` que levanta la aplicación completa con un solo comando.
-- [ ] Imágenes con versión fija.
+- [ ] `docker-compose.yml` con el sistema y todas sus dependencias: `docker compose up` deja el sistema funcionando.
+- [ ] Configuración por variables de entorno y `.env.example`, sin secretos en el código ni en la imagen.
+- [ ] *Healthcheck* usado por Compose y por el despliegue.
 - [ ] Imagen construida en el pipeline de CI.
 
 ---
