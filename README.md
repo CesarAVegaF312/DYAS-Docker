@@ -589,7 +589,7 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image
 
 Como referencia, una aplicación de ejemplo con **Spring Boot 2.7.18** (versión sin soporte de código abierto) arrojó **0 hallazgos** en los paquetes del sistema base y **8 críticos y 40 altos** en las dependencias Java, la mayoría en el Tomcat embebido. La imagen base estaba limpia: el riesgo venía de las dependencias desactualizadas del framework.
 
-Este escaneo se automatizará en el pipeline de CI en la sesión de DevSecOps.
+Este escaneo se puede automatizar como una etapa del pipeline de CI (ver el tema de DevSecOps).
 
 ---
 
@@ -701,7 +701,7 @@ Estructura mínima sugerida del Wiki:
 
 En este taller se construyen imágenes propias a partir de una aplicación sencilla y se aplican las prácticas que exige una imagen para producción: versiones fijas, capas ordenadas, contexto de construcción limpio, usuario sin privilegios y verificación de salud.
 
-Con Docker Compose se pasa de un contenedor a una aplicación de varios servicios, y con Traefik se ve cómo un balanceador reparte la carga entre réplicas. Finalmente, lo aprendido se aplica a la aplicación Java del proyecto, que en las siguientes sesiones se construirá, escaneará y publicará desde el pipeline de CI.
+Con Docker Compose se pasa de un contenedor a una aplicación de varios servicios, y con Traefik se ve cómo un balanceador reparte la carga entre réplicas. Finalmente, lo aprendido se aplica a la aplicación Java del proyecto, para que su imagen se pueda construir, escanear y publicar desde el pipeline de CI.
 
 ---
 
@@ -726,7 +726,7 @@ Checklist para el Proyecto 3 (sección 1 del enunciado):
 ---
 
 > **Resultado esperado:**
-> Al finalizar este taller, cada equipo contará con la **aplicación del proyecto contenerizada** con un Dockerfile *multi-stage*, un **archivo de Compose** que levanta la aplicación con sus dependencias y la experiencia de **escalar y balancear** un servicio, como base para el **monitoreo**, la **seguridad** y el **despliegue continuo** de las siguientes sesiones.
+> Al finalizar este taller, cada equipo contará con la **aplicación del proyecto contenerizada** con un Dockerfile *multi-stage*, un **archivo de Compose** que levanta la aplicación con sus dependencias y la experiencia de **escalar y balancear** un servicio, como base para el **monitoreo**, la **seguridad** y el **despliegue continuo** de la aplicación.
 
 ---
 
