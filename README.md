@@ -27,7 +27,7 @@ Comprender y aplicar los conceptos de **imagen, contenedor, capa, volumen y red*
   - [Paso 6: Balanceo de carga con Traefik](#paso-6-balanceo-de-carga-con-traefik)
 - [PARTE 3: COMPARTIR IMÁGENES](#parte-3-compartir-imágenes)
 - [PARTE 4: CONTENERIZAR UNA APLICACIÓN JAVA](#parte-4-contenerizar-una-aplicación-java)
-- [Escaneo de vulnerabilidades (opcional)](#escaneo-de-vulnerabilidades-opcional)
+- [Seguridad de la imagen (opcional)](#seguridad-de-la-imagen-opcional)
 - [Problemas frecuentes](#problemas-frecuentes)
 - [Buenas prácticas](#buenas-prácticas)
 - [Para entregar](#para-entregar-con-este-taller)
@@ -370,7 +370,7 @@ services:
       redis:
         condition: service_healthy
   redis:
-    image: redis:8.2
+    image: redis:8.8
     command: redis-server --appendonly yes
     volumes:
       - ./data:/data
@@ -433,7 +433,7 @@ services:
       - "traefik.http.routers.web.entrypoints=web"
       - "traefik.http.services.web.loadbalancer.server.port=8000"
   redis:
-    image: redis:8.2
+    image: redis:8.8
     command: redis-server --appendonly yes
     volumes:
       - ./data:/data
@@ -514,6 +514,28 @@ Para compartir una imagen se usa un **registro**. En este taller se usa Docker H
    docker push <usuario>/friendlyhello:latest
    ```
 
+### Publicar en GitHub Container Registry (GHCR)
+
+GHCR es el registro de GitHub y el que usan los pipelines de GitHub Actions. El procedimiento es el mismo; cambian el nombre de la imagen y la credencial.
+
+1. En GitHub: *Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token*, con el permiso **`write:packages`** y una fecha de vencimiento corta.
+2. Inicia sesión con tu usuario de GitHub y pega el token cuando lo pida (no lo escribas en el comando: quedaría en el historial de la terminal):
+
+   ```bash
+   docker login ghcr.io -u <usuario-de-github>
+   ```
+
+3. El nombre de la imagen empieza por `ghcr.io/` y el usuario va en **minúsculas**:
+
+   ```bash
+   docker tag <usuario>/friendlyhello:0.1.0 ghcr.io/<usuario-en-minúsculas>/friendlyhello:0.1.0
+   docker push ghcr.io/<usuario-en-minúsculas>/friendlyhello:0.1.0
+   ```
+
+4. La imagen aparece en tu perfil de GitHub, pestaña **Packages**, como **privada**. Para que un compañero la descargue sin credenciales, cámbiala a pública en *Package settings → Change visibility*.
+
+> En un pipeline de GitHub Actions no se usa un token personal: el workflow inicia sesión con el `GITHUB_TOKEN` que GitHub crea en cada ejecución, con el permiso `packages: write`.
+
 ### Ejercicios
 
 1. Cambia `docker-compose.yaml` para usar **tu imagen publicada** (`image: <usuario>/friendlyhello:0.1.0`) en lugar de `build: .`.
@@ -531,7 +553,7 @@ Esta parte se hace en el **repositorio del proyecto del equipo** (aplicación Sp
 # syntax=docker/dockerfile:1
 
 # Etapa 1: compilar el .jar con Maven (las pruebas ya corrieron en el pipeline de CI)
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3.9.16-eclipse-temurin-21-noble AS build
 WORKDIR /src
 COPY pom.xml .
 RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q dependency:go-offline
@@ -540,13 +562,19 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q package -DskipTests \
  && cp target/*.jar /app.jar
 
 # Etapa 2: imagen final solo con el JRE y el .jar
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21.0.12.1_1-jre-noble
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
 WORKDIR /app
 COPY --from=build --chown=app:app /app.jar app.jar
 USER app
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+
+# Docker y Compose consultan este endpoint para saber si la aplicación está lista (requiere Spring Boot Actuator)
+HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=5 \
+  CMD curl -fsS http://localhost:8080/actuator/health/readiness || exit 1
+
+# La JVM usa como máximo el 75 % de la memoria que el contenedor tenga asignada
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
 ```
 
 **`.dockerignore`**
@@ -558,6 +586,9 @@ target/
 .idea/
 .vscode/
 *.md
+.env
+.env.*
+docker-compose*.yml
 ```
 
 | Elemento | Explicación |
@@ -566,7 +597,10 @@ target/
 | `COPY pom.xml` antes de `COPY src` | Las dependencias se descargan en una capa propia que se reutiliza mientras el `pom.xml` no cambie. |
 | `--mount=type=cache,target=/root/.m2` | Caché de BuildKit para las dependencias de Maven entre *builds*. |
 | `-DskipTests` | Las pruebas ya se ejecutan en el pipeline de CI con `mvn verify`; no se repiten al construir la imagen. |
-| `eclipse-temurin:21-jre` | Solo el entorno de ejecución. Usa la misma versión de Java del proyecto o una superior. |
+| `maven:3.9.16-eclipse-temurin-21-noble` y `eclipse-temurin:21.0.12.1_1-jre-noble` | Imágenes base con **versión completa**. Una etiqueta como `21-jre` cambia de contenido con cada parche y el mismo Dockerfile produce imágenes distintas según el día. Dependabot (o una revisión periódica) propone la versión nueva. |
+| `HEALTHCHECK` con `/actuator/health/readiness` | Indica si la aplicación está lista para recibir peticiones. A diferencia de `/actuator/health`, no incluye la base de datos: si la base de datos falla, Docker no reinicia la aplicación sin necesidad. Si el proyecto no tiene Actuator, agrega la dependencia `spring-boot-starter-actuator`. Las imágenes `-noble` (Ubuntu) traen `curl`; las `-alpine` no. |
+| `-XX:MaxRAMPercentage=75` | Sin esta opción la JVM calcula su memoria con valores pensados para un servidor completo. Con ella respeta el límite de memoria del contenedor y deja espacio para el resto del proceso. |
+| `.env` en `.dockerignore` | El archivo con las claves locales nunca debe terminar dentro de la imagen. |
 
 Construye y ejecuta:
 
@@ -577,19 +611,111 @@ docker run --rm -p 8080:8080 proyecto:dev
 
 > Si `target/` tiene más de un `.jar` (por ejemplo, uno de fuentes), ajusta `cp target/*.jar` al nombre exacto del archivo que genera `spring-boot-maven-plugin`.
 
----
+Si la aplicación necesita una base de datos, este `docker run` falla al arrancar: el siguiente paso la levanta junto con la base de datos.
 
-## Escaneo de vulnerabilidades (opcional)
+### Aplicación y base de datos con Compose
 
-Una imagen puede tener vulnerabilidades conocidas en el sistema base o en las dependencias de la aplicación. [Trivy](https://trivy.dev/) las detecta:
+La aplicación del proyecto casi siempre necesita otros servicios. Con Compose se levanta todo con un comando, y las claves llegan por variables de entorno desde un archivo `.env` que no se sube al repositorio. El ejemplo usa PostgreSQL; con MySQL o MongoDB cambian la imagen y las variables.
 
-```bash
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --severity HIGH,CRITICAL proyecto:dev
+**`docker-compose.yml`** (en la raíz del proyecto)
+
+```yaml
+name: proyecto
+
+services:
+  app:
+    build: .
+    image: proyecto:dev
+    ports:
+      - "8080:8080"
+    environment:
+      # Spring Boot lee estas variables como spring.datasource.url, username y password
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-proyecto}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?Defina POSTGRES_USER (ver .env.example)}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD (ver .env.example)}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-proyecto}
+      POSTGRES_USER: ${POSTGRES_USER:?Defina POSTGRES_USER (ver .env.example)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD (ver .env.example)}
+    volumes:
+      - datos-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  datos-db:
 ```
 
-Como referencia, una aplicación de ejemplo con **Spring Boot 2.7.18** (versión sin soporte de código abierto) arrojó **0 hallazgos** en los paquetes del sistema base y **8 críticos y 40 altos** en las dependencias Java, la mayoría en el Tomcat embebido. La imagen base estaba limpia: el riesgo venía de las dependencias desactualizadas del framework.
+**`.env.example`** (sí se sube al repositorio: documenta qué variables hacen falta, con valores de ejemplo)
 
-Este escaneo se puede automatizar como una etapa del pipeline de CI (ver el tema de DevSecOps).
+```text
+# Copie este archivo como .env y cambie los valores: cp .env.example .env
+POSTGRES_DB=proyecto
+POSTGRES_USER=proyecto
+POSTGRES_PASSWORD=cambie-esta-clave
+```
+
+Agrega `.env` al `.gitignore` del proyecto. Después:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose ps
+```
+
+| Elemento | Explicación |
+|----------|-------------|
+| `${POSTGRES_USER:?mensaje}` | Variable **obligatoria**: si no está en el `.env` ni en el entorno, Compose se detiene con ese mensaje en lugar de arrancar con un valor vacío. |
+| `${POSTGRES_DB:-proyecto}` | Variable con **valor por defecto**. Úsalo solo para valores que no son secretos. |
+| `SPRING_DATASOURCE_*` | Spring Boot convierte las variables de entorno en propiedades (`SPRING_DATASOURCE_URL` → `spring.datasource.url`), así que no hace falta cambiar `application.properties`. |
+| `db:5432` | Dentro de la red de Compose cada servicio se encuentra por su nombre. `localhost` dentro del contenedor de la aplicación es la propia aplicación, no la base de datos. |
+| `depends_on` con `service_healthy` | La aplicación arranca cuando PostgreSQL responde a `pg_isready`, no apenas se crea su contenedor. |
+| `volumes: datos-db` | Los datos sobreviven a `docker compose down`. `docker compose down -v` los borra. |
+| `$${POSTGRES_USER}` | El `$$` evita que Compose reemplace la variable: la expande el contenedor de PostgreSQL al ejecutar el *healthcheck*. |
+
+> El taller de [DevSecOps](https://github.com/CesarAVegaF312/DYAS-DevSecOps) tiene un ejemplo completo con endurecimiento adicional: sistema de archivos de solo lectura, sin capacidades de Linux, límites de CPU y memoria y la base de datos publicada solo en `127.0.0.1`.
+
+---
+
+## Seguridad de la imagen (opcional)
+
+### Escaneo de vulnerabilidades
+
+Una imagen puede tener vulnerabilidades conocidas en el sistema base o en las dependencias de la aplicación. [Trivy](https://trivy.dev/) las detecta. Como cualquier otra imagen, Trivy se usa con versión fija:
+
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.0 image --severity HIGH,CRITICAL proyecto:dev
+```
+
+Como referencia, un proyecto recién generado en Spring Initializr con **Spring Boot 4.1.1**, contenerizado con el Dockerfile de la Parte 4, arrojó **0 hallazgos** en los paquetes del sistema base y **8** en las dependencias Java: 3 críticos en el Tomcat embebido (11.0.24) y 5 altos en Jackson (3.1.5), todos con corrección publicada. Usar la versión más reciente del framework no garantiza que sus dependencias estén libres de vulnerabilidades conocidas. El taller de [DevSecOps](https://github.com/CesarAVegaF312/DYAS-DevSecOps) muestra cómo fijar en el `pom.xml` las versiones corregidas y registrar la decisión.
+
+Con una versión sin soporte la situación empeora: una aplicación con **Spring Boot 2.7.18** arrojó 8 críticos y 40 altos, la mayoría en el Tomcat embebido.
+
+### Lista de materiales (SBOM)
+
+Un SBOM (*Software Bill of Materials*) es el inventario de todo lo que quedó dentro de la imagen: paquetes del sistema operativo y librerías de la aplicación, cada uno con su versión, en un formato estándar como CycloneDX. Sirve para responder en minutos si una vulnerabilidad publicada mañana afecta a una imagen que ya está desplegada. Trivy lo genera:
+
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/out" \
+  aquasec/trivy:0.76.0 image --format cyclonedx --output /out/sbom.cdx.json proyecto:dev
+```
+
+> En Git Bash (Windows) antepón `MSYS_NO_PATHCONV=1` y usa `"$(pwd -W):/out"` en lugar de `"$(pwd):/out"`.
+
+### Firma de la imagen
+
+Escanear una imagen no dice **quién** la construyó. Si alguien sube al registro una imagen distinta con la misma etiqueta, el despliegue la toma igual. Para evitarlo, el pipeline **firma** la imagen y el despliegue **verifica** la firma antes de ejecutarla. El taller de [DevSecOps](https://github.com/CesarAVegaF312/DYAS-DevSecOps) automatiza el escaneo, el SBOM y la firma (con Sigstore cosign) como etapas del pipeline de CI/CD.
 
 ---
 
@@ -605,12 +731,16 @@ Este escaneo se puede automatizar como una etapa del pipeline de CI (ver el tema
 | Los datos de Redis aparecen dentro de la imagen | Falta el `.dockerignore` con `data/`. |
 | Los contenedores se llaman `friendlyhello_web_1` en un tutorial | Es la nomenclatura de Compose v1. En Compose v2 es `friendlyhello-web-1`. |
 | En Git Bash (Windows) falla un comando con rutas como `/var/run/docker.sock` o `/app` | Git Bash convierte esas rutas a rutas de Windows. Antepón `MSYS_NO_PATHCONV=1` al comando o ejecútalo en PowerShell. |
+| El contenedor `web` se detiene y el log muestra `SyntaxError: Non-UTF-8 code starting with '\xf3'` | `app.py` se guardó con la codificación de Windows y tiene tildes en los comentarios. Guárdalo como **UTF-8** (en VS Code: barra inferior → codificación → *Save with Encoding* → UTF-8). |
+| `required variable POSTGRES_USER is missing a value: Defina POSTGRES_USER (ver .env.example)` | No existe el archivo `.env` o le falta esa variable. Ejecuta `cp .env.example .env`. |
+| La aplicación Java no se conecta: `Connection to localhost:5432 refused` | Dentro del contenedor, `localhost` es la propia aplicación. La URL debe usar el nombre del servicio de Compose: `jdbc:postgresql://db:5432/...`. |
+| La aplicación Java queda `unhealthy` y el log del *healthcheck* dice `curl: not found` | La imagen base es `-alpine`, que no trae `curl`. Usa la variante `-noble` o cambia el comando por `wget -qO- ...`. |
 
 ---
 
 ## Buenas prácticas
 
-1. **Versiones fijas:** imagen base (`python:3.14-slim`, `redis:8.2`, `traefik:v3.7`) y dependencias (`requirements.txt`, `pom.xml`) con versión. `latest` cambia sin aviso.
+1. **Versiones fijas:** imagen base (`python:3.14-slim`, `redis:8.8`, `traefik:v3.7`) y dependencias (`requirements.txt`, `pom.xml`) con versión. `latest` cambia sin aviso.
 2. **Orden de capas:** primero lo que cambia poco (dependencias), después lo que cambia mucho (código).
 3. **`.dockerignore` siempre:** el *build context* debe contener solo lo necesario.
 4. **Usuario sin privilegios:** `USER` distinto de `root` en la imagen final.
@@ -776,7 +906,11 @@ Con esto se obtiene una base común para ejecutar, probar y desplegar la aplicac
 - Documentación oficial de Docker – [Multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
 - Documentación oficial de Docker – [Docker Compose](https://docs.docker.com/compose/)
 - [Traefik – Docker provider](https://doc.traefik.io/traefik/providers/docker/)
-- [Trivy](https://trivy.dev/)
+- Documentación oficial de Docker – [Interpolation (variables en Compose)](https://docs.docker.com/reference/compose-file/interpolation/)
+- Spring Boot – [Externalized Configuration: binding from environment variables](https://docs.spring.io/spring-boot/reference/features/external-config.html#features.external-config.typesafe-configuration-properties.relaxed-binding.environment-variables)
+- Spring Boot – [Kubernetes probes (liveness y readiness)](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html#actuator.endpoints.kubernetes-probes)
+- GitHub Docs – [Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [Trivy](https://trivy.dev/) y CycloneDX – [Specification overview](https://cyclonedx.org/specification/overview/)
 - Aula de Software Libre (Universidad de Córdoba) – [Taller de Docker](https://aulasoftwarelibre.github.io/taller-de-docker/)
 
 ---
